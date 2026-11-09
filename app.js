@@ -83,13 +83,15 @@ function bass(midi, t, dur) {
 }
 // シンバル（ハイハット）
 let noiseBuf;
+function makeNoise(c) {
+  if (noiseBuf) return;
+  noiseBuf = c.createBuffer(1, c.sampleRate * 0.5, c.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+}
 function hat(t, vol = 0.12, len = 0.08) {
   const c = ac();
-  if (!noiseBuf) {
-    noiseBuf = c.createBuffer(1, c.sampleRate * 0.5, c.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  }
+  makeNoise(c);
   const s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
   s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = 7000;
   s.connect(f); f.connect(g); g.connect(master);
@@ -106,11 +108,13 @@ function stopAll() {
 }
 function at(t, fn) { timers.push(setTimeout(fn, Math.max(0, (t - ac().currentTime) * 1000))); }
 
-function playChordSym(s, { arp = false, withBass = true } = {}) {
+const guideOf = (ch, v) => [v[1], v[3]]; // 3度と7度
+function playChordSym(s, { arp = false, withBass = true, guide = false } = {}) {
   stopAll();
   const c = ac(), t = c.currentTime + 0.05, ch = parseChord(s);
+  let v = voicing(ch); if (guide) v = guideOf(ch, v);
   if (withBass) bass(bassOf(ch.root), t, 1.6);
-  voicing(ch).forEach((n, i) => tone(n, t + (arp ? i * 0.35 : 0), arp ? 1.6 - i * 0.2 : 1.8));
+  v.forEach((n, i) => tone(n, t + (arp ? i * 0.35 : 0), arp ? 1.6 - i * 0.2 : 1.8));
 }
 function playNotes(notes, { arp = false } = {}) {
   stopAll();
@@ -119,12 +123,15 @@ function playNotes(notes, { arp = false } = {}) {
 }
 
 /* 進行を伴奏つきで演奏（ウォーキングベース＋コンピング＋シンバル）
- * items: "Dm7"（4拍） or "Dm7:2"（2拍） */
-function playProg(items, { bpm = 120, loop = false, onStep } = {}) {
+ * items: "Dm7"（4拍） or "Dm7:2"（2拍）
+ * guide: ガイドトーン（3度・7度）だけで和音を弾く
+ * extra(t0, spb): 伴奏に重ねるメロディなどを予約する */
+function playProg(items, { bpm = 120, loop = false, onStep, guide = false, extra } = {}) {
   stopAll();
   const c = ac(), spb = 60 / bpm;
   const list = items.map(x => { const [s, b] = x.split(':'); return { s, b: +(b || 4), ch: parseChord(s) }; });
   let i = 0, t = c.currentTime + 0.1;
+  if (extra) extra(t, spb);
   const tick = () => {
     while (t < c.currentTime + 0.6) {
       if (i >= list.length) {
@@ -135,9 +142,14 @@ function playProg(items, { bpm = 120, loop = false, onStep } = {}) {
       const r = bassOf(it.ch.root), nr = bassOf(next.ch.root);
       const walk = it.b >= 4 ? [r, r + it.ch.iv[1], r + it.ch.iv[2], nr - 1] : [r, nr + 1];
       walk.forEach((n, k) => bass(n, t + k * spb, spb * 0.95));
-      const v = voicing(it.ch);
-      v.forEach(n => tone(n, t, spb * 0.8, 0.09));
-      if (it.b >= 4) v.forEach(n => tone(n, t + spb * 1.67, spb * 0.4, 0.07)); // 2拍目の裏（スウィング）
+      let v = voicing(it.ch);
+      if (guide) {
+        v = guideOf(it.ch, v);
+        v.forEach(n => tone(n, t, it.b * spb * 0.95, 0.12)); // のばして「つながり」を聴かせる
+      } else {
+        v.forEach(n => tone(n, t, spb * 0.8, 0.09));
+        if (it.b >= 4) v.forEach(n => tone(n, t + spb * 1.67, spb * 0.4, 0.07)); // 2拍目の裏（スウィング）
+      }
       for (let k = 0; k < it.b; k++) {
         hat(t + k * spb, k % 2 ? 0.1 : 0.05);
         if (k % 2) hat(t + (k + 0.67) * spb, 0.04);
@@ -149,24 +161,52 @@ function playProg(items, { bpm = 120, loop = false, onStep } = {}) {
   const id = setInterval(tick, 100); loops.push(id); tick();
 }
 
-/* 8分音符のメロディ：ストレート or スウィング */
-function playEighths(swing) {
+/* 手拍子 */
+function clap(t) {
+  const c = ac();
+  makeNoise(c);
+  const s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+  s.buffer = noiseBuf; f.type = 'bandpass'; f.frequency.value = 1400; f.Q.value = 0.8;
+  s.connect(f); f.connect(g); g.connect(master);
+  g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+  s.start(t); track(s, t + 0.15);
+}
+
+/* 8分音符のメロディ（リズムの聴きくらべ用）
+ * swing: 跳ねる / ratio: 跳ね具合（0.5=まっすぐ, 0.67=3連符）
+ * accent: 'up'=裏拍を強く 'down'=表拍を強く / delay: 拍に対して何秒うしろに置くか
+ * claps: 手拍子を打つ拍（0始まり） */
+function playEighths({ swing = true, bpm = 120, ratio = 0.67, accent = null, delay = 0, claps = null } = {}) {
   stopAll();
-  const c = ac(), spb = 0.5;
-  const mel = [60, 62, 64, 65, 67, 69, 67, 64, 65, 64, 62, 60, 62, 59, 60, 60];
-  const t0 = c.currentTime + 0.1;
+  const c = ac(), spb = 60 / bpm;
+  const base = [60, 62, 64, 65, 67, 69, 67, 64, 65, 64, 62, 60, 62, 59, 60, 60];
+  const reps = bpm > 180 ? 2 : 1;
+  const mel = Array.from({ length: reps }, () => base).flat();
+  const r = swing ? ratio : 0.5;
+  const t0 = c.currentTime + 0.15;
   mel.forEach((n, i) => {
-    const beat = Math.floor(i / 2), off = i % 2 ? (swing ? 0.67 : 0.5) : 0;
-    const t = t0 + (beat + off) * spb;
-    tone(n + 12, t, (i % 2 ? (swing ? 0.3 : 0.45) : (swing ? 0.6 : 0.45)) * spb + 0.05, i % 2 && swing ? 0.1 : 0.13);
+    const beat = Math.floor(i / 2), up = i % 2 === 1;
+    const t = t0 + (beat + (up ? r : 0)) * spb + delay;
+    let vol = up ? (swing ? 0.1 : 0.12) : 0.13;
+    if (accent === 'up') vol = up ? 0.17 : 0.07;
+    if (accent === 'down') vol = up ? 0.06 : 0.17;
+    const len = (up ? 1 - r : r) * spb;
+    tone(n + 12, t, len * 0.9 + 0.04, vol);
   });
-  for (let b = 0; b < 8; b++) hat(t0 + b * spb, b % 2 ? 0.12 : 0.04);
+  const beats = mel.length / 2;
+  for (let b = 0; b < beats; b++) {
+    hat(t0 + b * spb, b % 2 ? 0.12 : 0.04);
+    bass(bassOf(0) + (b % 4 === 2 ? 7 : 0), t0 + b * spb, spb * 0.9);
+    if (claps && claps.includes(b % 4)) clap(t0 + b * spb);
+  }
 }
 /* フレーズ: [midi or null, 拍数] */
-function playPhrase(ph, bpm = 120) {
+function schedPhrase(ph, t, spb, shift = 0) {
+  ph.forEach(([n, b]) => { if (n) tone(n + shift, t, b * spb * 0.9 + 0.05, 0.16); t += b * spb; });
+}
+function playPhrase(ph, bpm = 120, shift = 0) {
   stopAll();
-  const spb = 60 / bpm; let t = ac().currentTime + 0.1;
-  ph.forEach(([n, b]) => { if (n) tone(n, t, b * spb * 0.9 + 0.05, 0.15); t += b * spb; });
+  schedPhrase(ph, ac().currentTime + 0.1, 60 / bpm, shift);
 }
 function playScale(root, iv) {
   stopAll();
@@ -179,24 +219,52 @@ const F_BLUES = ['F7', 'B♭7', 'F7', 'F7', 'B♭7', 'B♭7', 'F7', 'D7', 'Gm7',
 const AUTUMN = ['Cm7', 'F7', 'B♭maj7', 'E♭maj7', 'Am7♭5', 'D7', 'Gm7', 'Gm7'];
 const LICK = [[72, .67], [75, .33], [77, 1], [75, .67], [72, .33], [70, 1], [null, 1],
               [72, .67], [75, .33], [77, 1], [75, .67], [72, .33], [65, 2]];
+const CALL = [[72, .67], [75, .33], [77, 1], [75, .67], [72, .33], [70, 1.67], [68, .33], [65, 3]];
+const THREE = [[65, .67], [68, .33], [70, 1], [null, 1], [70, .67], [68, .33], [65, 2], [null, 2],
+               [68, .67], [70, .33], [68, .67], [65, .33], [70, 2]];
+
+const PILLARS = [
+  { name: 'リズム', note: '一番大事な土台' },
+  { name: '文法', note: '和音と進行のルール' },
+  { name: '語彙', note: '名演のフレーズをまねる' },
+  { name: '実践', note: '制限して弾く・会話する' },
+];
 
 const LESSONS = [
   {
-    id: 'swing', title: 'ジャズの「ノリ」を知る', sub: 'スウィング・2拍目と4拍目',
+    id: 'swing', p: 0, title: 'スウィングのノリ', sub: 'ジャズらしさの正体',
     cards: [
-      { h: 'ジャズらしさの正体は「リズム」', t: 'ジャズの一番の特徴は<b>スウィング</b>という跳ねるリズム。同じメロディでも、リズムを変えるだけでジャズっぽくなります。' },
-      { h: '聴きくらべてみよう', t: '同じメロディを2通りで弾きます。違いを感じてみてください。',
-        btns: [{ l: '▶ まっすぐ', s: 'タタ タタ', fn: () => playEighths(false) },
-               { l: '▶ スウィング', s: 'タッカ タッカ', fn: () => playEighths(true) }],
-        tip: 'スウィングは「長い・短い」の繰り返し。「タッカ タッカ」と口で言うのが近道です。' },
-      { h: '手拍子は2拍目と4拍目', t: 'ジャズでは「1・<b>2</b>・3・<b>4</b>」の<b>2と4</b>にアクセントがきます。シンバルの「チッ」が強く鳴るところで手を叩いてみましょう。',
-        btns: [{ l: '▶ もう一度スウィング', s: '2と4で手拍子', fn: () => playEighths(true) }] },
+      { h: 'ジャズらしさの正体は「リズム」', t: 'ジャズの一番の特徴は<b>スウィング</b>という跳ねるリズム。同じメロディでも、リズムを変えるだけでジャズになります。' },
+      { h: '聴きくらべてみよう', t: '同じメロディを2通りで弾きます。',
+        btns: [{ l: '▶ まっすぐ', s: 'タタ タタ', fn: () => playEighths({ swing: false }) },
+               { l: '▶ スウィング', s: 'タッカ タッカ', fn: () => playEighths() }],
+        tip: 'スウィングは「長・短」のくり返し。土台は<b>3連符</b>（タ・タ・タの1つ目と3つ目）です。' },
+      { h: '跳ね具合はテンポで変わる', t: 'ゆっくりの曲は深く跳ね、速い曲ほど跳ねが浅く、まっすぐに近づきます。楽譜どおりに一定ではありません。',
+        btns: [{ l: '▶ ゆっくり', s: '深く跳ねる', fn: () => playEighths({ bpm: 96, ratio: 0.7 }) },
+               { l: '▶ 速い', s: '浅く跳ねる', fn: () => playEighths({ bpm: 220, ratio: 0.58 }) }] },
+      { quiz: { q: 'スウィングの跳ね方の土台になるのは？', opts: ['16分音符', '3連符', '2分音符'], a: 1,
+        ex: '3連符の「1つ目と3つ目」が基本。そこからテンポに合わせて加減します。' } },
+    ],
+  },
+  {
+    id: 'backbeat', p: 0, title: '2・4拍と後ノリ', sub: '重心と裏拍のアクセント',
+    cards: [
+      { h: '重心は2拍目と4拍目', t: 'クラシックや童謡は1・3拍が強い。ジャズは<b>2・4拍</b>に重心があります。手拍子で比べてみましょう。',
+        btns: [{ l: '▶ 1・3で手拍子', s: 'ジャズっぽくない', fn: () => playEighths({ claps: [0, 2] }) },
+               { l: '▶ 2・4で手拍子', s: 'ジャズのノリ', fn: () => playEighths({ claps: [1, 3] }) }] },
+      { h: '裏拍にアクセント', t: '「タッカ」の<b>「カ」（裏拍）を少し強く</b>弾くと、ぐっとジャズらしい訛りになります。',
+        btns: [{ l: '▶ 表を強く', s: 'のっぺり', fn: () => playEighths({ accent: 'down' }) },
+               { l: '▶ 裏を強く', s: 'ジャズの訛り', fn: () => playEighths({ accent: 'up' }) }] },
+      { h: '後ノリ（レイドバック）', t: 'シンバルの拍に対して、メロディを<b>ほんの少しうしろ</b>に置くと、ゆったりした大人のノリになります。',
+        btns: [{ l: '▶ 前ノリ', s: '急いだ感じ', fn: () => playEighths({ delay: -0.03 }) },
+               { l: '▶ 後ノリ', s: 'ゆったり', fn: () => playEighths({ delay: 0.06 }) }],
+        tip: '違いはごくわずか。何度か聴きくらべて「落ち着く方」を探してみてください。' },
       { quiz: { q: 'ジャズで手拍子を打つのは何拍目？', opts: ['1拍目と3拍目', '2拍目と4拍目', '全部の拍'], a: 1,
         ex: '2と4で叩くと、一気にジャズのノリになります。' } },
     ],
   },
   {
-    id: 'seventh', title: 'ジャズの和音「セブンス」', sub: '4つの音でできたおしゃれな響き',
+    id: 'seventh', p: 1, title: 'セブンス和音', sub: '4つの音でできたおしゃれな響き',
     cards: [
       { h: '和音に1音足すとジャズになる', t: 'ポップスの和音は3つの音（ド・ミ・ソ）が基本。ジャズはもう1音足した<b>4音の和音</b>を使います。',
         btns: [{ l: '▶ C（3音）', s: 'ド・ミ・ソ', fn: () => playChordSym('C') },
@@ -216,23 +284,40 @@ const LESSONS = [
     ],
   },
   {
-    id: 'twofive', title: '最重要パターン ii-V-I', sub: 'ジャズの曲の大半はこれ',
+    id: 'twofive', p: 1, title: 'ii-V-I', sub: 'ジャズの決まり文句',
     cards: [
-      { h: 'ジャズの「決まり文句」', t: '<span class="chord">Dm7 → G7 → Cmaj7</span>。この3つの流れを<b>ツー・ファイブ・ワン</b>と呼びます。ジャズの曲の大部分はこの形の組み合わせです。',
+      { h: 'ジャズの「決まり文句」', t: '<span class="chord">Dm7 → G7 → Cmaj7</span>。この流れを<b>ツー・ファイブ・ワン</b>と呼びます。スタンダード曲のあちこちに出てくる、ジャズの基本の形です。',
         btns: [{ l: '▶ ii-V-I を聴く', s: 'Dm7 → G7 → Cmaj7', fn: () => playProg(['Dm7', 'G7', 'Cmaj7', 'Cmaj7']) }] },
       { h: '物語で覚える', t: '<span class="chord">Dm7</span> 出発 → <span class="chord">G7</span> 盛り上がり（緊張）→ <span class="chord">Cmaj7</span> 到着（ほっとする）。',
-        tip: 'レッスン2の「7は次へ進みたい」が、ここで活きてきます。' },
+        tip: '「7は次へ進みたい」が、ここで活きてきます。' },
       { h: 'どのキーでも同じ形', t: '高さが変わっても「m7 → 7 → maj7」の並びは同じ。形で覚えると楽になります。',
         btns: [{ l: '▶ キーF', s: 'Gm7 → C7 → Fmaj7', fn: () => playProg(['Gm7', 'C7', 'Fmaj7', 'Fmaj7']) },
-               { l: '▶ キーB♭', s: 'Cm7 → F7 → B♭maj7', fn: () => playProg(['Cm7', 'F7', 'B♭maj7', 'B♭maj7']) }] },
+               { l: '▶ キーB♭', s: 'Cm7 → F7 → B♭maj7', fn: () => playProg(['Cm7', 'F7', 'B♭maj7', 'B♭maj7']) }],
+        tip: '上達した人は<b>12のキーすべて</b>で反射的に弾けるまでくり返します。「鍵盤」タブでキーを変えて ii-V-I を鳴らせます。' },
       { quiz: { q: 'ii-V-I の「V」（真ん中）に来る和音の種類は？', opts: ['maj7', 'm7', '7'], a: 2,
         ex: 'm7 → <b>7</b> → maj7。真ん中が緊張役の 7 です。' } },
     ],
   },
   {
-    id: 'blues', title: 'ブルース：12小節の型', sub: 'セッションで一番よく演奏される形',
+    id: 'guide', p: 1, title: 'ガイドトーン', sub: '3度と7度で進行が聴こえる',
     cards: [
-      { h: 'ジャズの土台はブルース', t: 'ブルースは<b>12小節で1周</b>する決まった型。世界中のジャムセッションで最初に演奏されることが多い形です。' },
+      { h: '和音の「顔」は2つの音で決まる', t: '4つの音のうち、明るい・暗いなどの性格を決めるのは<b>3番目の音（3度）</b>と<b>7番目の音（7度）</b>。この2音を<b>ガイドトーン</b>と呼びます。',
+        btns: [{ l: '▶ Cmaj7 全部の音', s: 'ド・ミ・ソ・シ', fn: () => playChordSym('Cmaj7') },
+               { l: '▶ 3度と7度だけ', s: 'ミ・シ', fn: () => playChordSym('Cmaj7', { guide: true }) }],
+        tip: '2音だけでも、ちゃんと Cmaj7 の響きに聴こえます。' },
+      { h: 'ii-V-I をガイドトーンだけで', t: '<span class="chord">Dm7</span>（ファ・ド）→ <span class="chord">G7</span>（ファ・シ）→ <span class="chord">Cmaj7</span>（ミ・シ）。毎回<b>1音が半音動くだけ</b>。このなめらかなつながりが「進行が聴こえる」正体です。',
+        btns: [{ l: '▶ 全部の音で', s: '', fn: () => playProg(['Dm7', 'G7', 'Cmaj7', 'Cmaj7']) },
+               { l: '▶ ガイドトーンだけ', s: 'ド→シ、ファ→ミ', fn: () => playProg(['Dm7', 'G7', 'Cmaj7', 'Cmaj7'], { guide: true }) }] },
+      { h: 'アドリブの「道しるべ」', t: '和音が変わる瞬間に<b>ガイドトーンに着地</b>するだけで、伴奏がなくてもコード進行が聴こえるメロディになります。',
+        tip: '「鍵盤」タブで和音を選ぶと、光る4音のうち2番目と4番目がガイドトーンです。' },
+      { quiz: { q: 'ガイドトーンは何度と何度？', opts: ['1度と5度', '3度と7度', '9度と13度'], a: 1,
+        ex: '3度で明るい／暗い、7度で落ち着き／緊張が決まります。' } },
+    ],
+  },
+  {
+    id: 'blues', p: 1, title: 'ブルース12小節', sub: 'セッションで一番よく演奏される形',
+    cards: [
+      { h: 'ジャズの土台はブルース', t: 'ブルースは<b>12小節で1周</b>する決まった型。ジャムセッションで最初に演奏されることが多い形です。' },
       { h: '12小節を目で追おう', t: '今どこを弾いているか光ります。', grid: F_BLUES,
         btns: [{ l: '▶ Fのブルース', s: '12小節', fn: 'grid' }] },
       { h: '全部「7」なのがブルース', t: 'ふつうは緊張役の <span class="chord">7</span> を、ブルースではずっと使います。このザラッとした響きがブルースらしさです。',
@@ -241,25 +326,49 @@ const LESSONS = [
     ],
   },
   {
-    id: 'adlib', title: 'アドリブの第一歩', sub: 'ブルース・スケールで弾いてみる',
+    id: 'copy', p: 2, title: '耳コピ入門', sub: 'フレーズを「言葉」として覚える',
     cards: [
-      { h: 'アドリブ＝その場で作るメロディ', t: '難しく考えなくて大丈夫。最初は<b>6つの音だけ</b>で弾けます。それが<b>ブルース・スケール</b>です。',
-        btns: [{ l: '▶ Fブルース・スケール', s: 'F A♭ B♭ B C E♭', fn: () => playScale(65, BLUES_SCALE) }] },
-      { h: 'うまく聴こえる3つのコツ', t: '① 短いフレーズを<b>くり返す</b><br>② <b>休む</b>（音を出さない時間をつくる）<br>③ 2〜3音だけでもOK',
-        btns: [{ l: '▶ お手本フレーズ', s: '同じ形をくり返す', fn: () => playPhrase(LICK) }] },
-      { h: '伴奏に合わせて弾こう', t: '「鍵盤」タブでキーを F、種類を「ブルース音階」にして「伴奏」を押します。光っている鍵盤だけタップすればOK。',
-        tip: '間違えても大丈夫。ジャズでは「外した音」も味になります。' },
-      { quiz: { q: 'アドリブを上手に聴かせるコツは？', opts: ['できるだけ多くの音を弾く', 'くり返しと休みを使う', 'とにかく速く弾く'], a: 1,
-        ex: 'プロも「休み」と「くり返し」をたくさん使っています。' } },
+      { h: 'ジャズは「言葉」と同じ', t: '子どもがまねから言葉を覚えるように、ジャズも<b>名演のフレーズ（リック）を耳でまねる</b>ことで身につきます。これを<b>耳コピ</b>（トランスクリプション）と言います。' },
+      { h: '耳コピの3ステップ', t: '① 何度も聴いて<b>歌えるようにする</b><br>② 楽器で同じ音を探す<br>③ 原曲と<b>いっしょに</b>弾く（音だけでなく、ノリや強弱もまねる）',
+        tip: '最初は楽譜に書かなくてOK。耳と指を直接つなぐほうが早く身につきます。' },
+      { h: 'フレーズを分解する', t: 'このお手本は、Fのブルースの上で<b>ド・ミ♭・ファ</b>を往復しています。Fから数えると<b>5度・♭7度・1度</b>の音です。',
+        btns: [{ l: '▶ お手本フレーズ', s: 'キーF', fn: () => playPhrase(LICK) }] },
+      { h: '他のキーに移して自分の言葉に', t: '形はそのままで、高さだけ変えると別のキーでも使えます。こうしてまねたフレーズが「自分の語彙」になります。',
+        btns: [{ l: '▶ キーFで', s: '', fn: () => playPhrase(LICK) },
+               { l: '▶ キーB♭で', s: '同じ形を5つ上へ', fn: () => playPhrase(LICK, 120, 5) }] },
+      { h: '「まねっこ」で練習', t: '<b>耳トレ</b>タブの<b>まねっこ</b>では、短いフレーズを聴いて鍵盤でまねる練習ができます。毎日数問やってみましょう。' },
+      { quiz: { q: '耳コピで最初にやることは？', opts: ['楽譜に書き起こす', '何度も聴いて歌えるようにする', 'とにかく速く弾く'], a: 1,
+        ex: '歌えるフレーズは弾けるフレーズ。まずは耳と口で覚えます。' } },
     ],
   },
   {
-    id: 'standard', title: 'スタンダード曲を聴く', sub: '「枯葉」で全部がつながる',
+    id: 'adlib', p: 3, title: '制限してアドリブ', sub: '少ない音で歌うように弾く',
+    cards: [
+      { h: 'アドリブ＝その場で作るメロディ', t: '当てずっぽうではなく、和音のルールの上で作ります。最初は<b>ブルース・スケール</b>の6音だけで十分です。',
+        btns: [{ l: '▶ Fブルース・スケール', s: 'F A♭ B♭ B C E♭', fn: () => playScale(65, BLUES_SCALE) }] },
+      { h: '制限するとうまくなる', t: '使える音を絞ると、リズムと「間」に集中できます。<br>① まず<b>3音だけ</b>（ファ・ラ♭・シ♭）<br>② 次に<b>和音の音だけ</b><br>③ 最後にスケール全部',
+        btns: [{ l: '▶ 3音だけの例', s: 'ファ・ラ♭・シ♭', fn: () => playPhrase(THREE) }],
+        tip: 'くり返す・休む。3音でもこれだけで立派なアドリブです。' },
+      { h: 'コール＆レスポンス（会話）', t: 'お手本が2小節弾いたら、次の2小節は<b>あなたの番</b>。まねしても、答えを返してもOK。',
+        grid: ['お手本', '〃', 'あなた', '〃', 'お手本', '〃', 'あなた', '〃'],
+        prog: ['F7', 'B♭7', 'F7', 'F7', 'B♭7', 'B♭7', 'F7', 'F7'],
+        extra: (t, spb) => { schedPhrase(CALL, t, spb); schedPhrase(CALL, t + 16 * spb, spb); },
+        btns: [{ l: '▶ 会話してみる', s: '8小節', fn: 'grid' }],
+        tip: '「鍵盤」タブでキーF・ブルース音階にすると、光る鍵盤で答えられます。' },
+      { quiz: { q: 'アドリブを上手に聴かせるコツは？', opts: ['できるだけ多くの音を弾く', 'くり返しと休みを使う', 'とにかく速く弾く'], a: 1,
+        ex: '休符は会話の「間」。相手の音を聴く時間にもなります。' } },
+    ],
+  },
+  {
+    id: 'standard', p: 3, title: 'スタンダード曲', sub: '「枯葉」で全部がつながる',
     cards: [
       { h: '名曲「枯葉」', t: 'ジャズの定番曲。じつは<b>ii-V-I の連続</b>でできています。',
         btns: [{ l: '▶ 枯葉の進行', s: 'Cm7 F7 B♭maj7 …', fn: 'grid' }], grid: AUTUMN },
+      { h: '1曲を身につける手順', t: '① <b>ベースライン</b>（各和音の一番下の音）を弾く<br>② <b>ガイドトーン</b>だけでつなぐ<br>③ 名演のソロを<b>少しだけ耳コピ</b>する',
+        btns: [{ l: '▶ 枯葉をガイドトーンで', s: '②の見本', fn: () => playProg(AUTUMN, { bpm: 132, guide: true }) }],
+        tip: '最初の1曲は「枯葉」のほか「C Jam Blues」「Fly Me to the Moon」もおすすめ。' },
       { h: '演奏の流れを知ると聴きやすい', t: '① <b>テーマ</b>（みんなで曲のメロディ）<br>② <b>ソロ</b>（順番にアドリブ）<br>③ <b>テーマ</b>（もう一度メロディで終わる）',
-        tip: '拍手はソロが終わるたびにしてOK。ライブで迷わなくなります。' },
+        tip: 'ソロのあいだ、ピアノやドラムがソロに「返事」をしているのにも耳をすませてみてください。' },
       { h: 'まず聴きたい名盤', albums: [
         ['Somethin\' Else', 'キャノンボール・アダレイ（1958）／「枯葉」の決定版'],
         ['Kind of Blue', 'マイルス・デイヴィス（1959）／ジャズで最も売れたアルバム'],
@@ -289,31 +398,39 @@ function showView(name) {
   stopAll();
   document.querySelectorAll('.view').forEach(v => { v.hidden = v.id !== 'view-' + name; });
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === name));
-  if (name === 'ear' && !ear.cur) newEar();
+  if (name === 'ear' && !ear.cur) setEarMode('chord');
 }
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showView(b.dataset.view); });
 
 /* ========== 学ぶ ========== */
 function nextLessonIndex() { const i = LESSONS.findIndex(l => !store.done.includes(l.id)); return i < 0 ? 0 : i; }
 function renderRoadmap() {
-  const ul = $('#roadmap'); ul.innerHTML = '';
+  const box = $('#roadmap'); box.innerHTML = '';
   const nx = nextLessonIndex();
-  LESSONS.forEach((l, i) => {
-    const done = store.done.includes(l.id);
-    const li = el('li');
-    const b = el('button', done ? 'done' : (i === nx ? 'next' : ''),
-      `<span class="no">${done ? '✓' : i + 1}</span><span class="t">${l.title}<span class="s">${l.sub}</span></span><span class="mark">${done ? '復習' : (i === nx ? 'つぎ' : '')}</span>`);
-    b.addEventListener('click', () => openLesson(i));
-    li.appendChild(b); ul.appendChild(li);
+  PILLARS.forEach((p, pi) => {
+    const items = LESSONS.map((l, i) => ({ l, i })).filter(x => x.l.p === pi);
+    const doneN = items.filter(x => store.done.includes(x.l.id)).length;
+    const sec = el('li', 'pillar');
+    sec.append(el('div', 'p-head', `<span class="p-no">柱${pi + 1}</span><b>${p.name}</b><span class="p-note">${p.note}</span><span class="p-prog">${doneN}/${items.length}</span>`));
+    const row = el('div', 'p-lessons');
+    items.forEach(({ l, i }) => {
+      const done = store.done.includes(l.id);
+      const b = el('button', 'lchip' + (done ? ' done' : '') + (i === nx && !done ? ' next' : ''),
+        `<span class="no">${done ? '✓' : i + 1}</span>${l.title}`);
+      b.addEventListener('click', () => openLesson(i));
+      row.append(b);
+    });
+    sec.append(row); box.append(sec);
   });
-  $('#nextLessonBtn').textContent = store.done.length === LESSONS.length ? '全部クリア！ 復習する' : `▶ レッスン${nx + 1}を始める`;
+  $('#nextLessonBtn').textContent = store.done.length === LESSONS.length
+    ? '全部クリア！ 復習する' : `▶ 次：${nx + 1}. ${LESSONS[nx].title}`;
   updateTop();
 }
 $('#nextLessonBtn').addEventListener('click', () => openLesson(nextLessonIndex()));
 
 /* ========== レッスン画面 ========== */
-let L = null; // { i, step, ok }
-function openLesson(i) { stopAll(); L = { i, step: 0, ok: true }; $('#lesson').hidden = false; renderCard(); }
+let L = null; // { i, step }
+function openLesson(i) { stopAll(); L = { i, step: 0 }; $('#lesson').hidden = false; renderCard(); }
 function closeLesson() { stopAll(); L = null; $('#lesson').hidden = true; renderRoadmap(); }
 $('#lessonClose').addEventListener('click', closeLesson);
 $('#lessonNext').addEventListener('click', () => {
@@ -340,7 +457,7 @@ function renderCard() {
   }
   const c = les.cards[L.step];
   next.textContent = L.step === n - 1 ? '完了する' : '次へ';
-  card.append(el('p', 'lead', `LESSON ${L.i + 1}`));
+  card.append(el('p', 'lead', `LESSON ${L.i + 1}・柱${les.p + 1} ${PILLARS[les.p].name}`));
 
   if (c.quiz) {
     const q = c.quiz;
@@ -371,6 +488,7 @@ function renderCard() {
   if (c.grid) {
     grid = el('div', 'grid');
     c.grid.forEach(s => grid.append(el('div', '', s)));
+    card.append(grid);
   }
   if (c.btns) {
     const box = el('div', 'btns');
@@ -380,7 +498,7 @@ function renderCard() {
         b.dataset.toggle = '1';
         b.addEventListener('click', () => {
           if (b.classList.contains('on')) { stopAll(); grid.querySelectorAll('div').forEach(d => d.classList.remove('now')); return; }
-          playProg(c.grid, { bpm: 132, onStep: idx => {
+          playProg(c.prog || c.grid, { bpm: 132, extra: c.extra, onStep: idx => {
             grid.querySelectorAll('div').forEach((d, k) => d.classList.toggle('now', k === idx));
             if (idx < 0) b.classList.remove('on');
           } });
@@ -389,9 +507,8 @@ function renderCard() {
       } else b.addEventListener('click', bd.fn);
       box.append(b);
     });
-    if (grid) card.append(grid);
     card.append(box);
-  } else if (grid) card.append(grid);
+  }
   if (c.albums) {
     const ul = el('ul', 'albums');
     c.albums.forEach(([a, d]) => ul.append(el('li', '', `<b>${a}</b><span>${d}</span>`)));
@@ -400,9 +517,41 @@ function renderCard() {
   if (c.tip) card.append(el('p', 'tip', c.tip));
 }
 
+/* ========== 共通：鍵盤をつくる ========== */
+function buildKb(box, low, high, onPress) {
+  box.innerHTML = '';
+  let whites = 0;
+  for (let m = low; m <= high; m++) if (![1, 3, 6, 8, 10].includes(m % 12)) whites++;
+  box.style.setProperty('--wn', whites);
+  let w = 0;
+  for (let m = low; m <= high; m++) {
+    const pc = m % 12, black = [1, 3, 6, 8, 10].includes(pc);
+    const k = el('button', black ? 'b' : 'w');
+    k.dataset.m = m; k.setAttribute('aria-label', NOTE[pc]);
+    k.append(el('span', 'lbl', ''));
+    if (black) k.style.left = `calc(100% / ${whites} * ${w} - 100% / ${whites} * .31)`; else w++;
+    k.addEventListener('pointerdown', e => {
+      e.preventDefault(); tone(m, ac().currentTime + 0.01, 0.9, 0.18);
+      k.classList.add('press'); setTimeout(() => k.classList.remove('press'), 150);
+      onPress && onPress(m, k);
+    });
+    box.append(k);
+  }
+}
+
 /* ========== 耳トレ ========== */
-const ear = { level: 1, cur: null, n: 0, ok: 0, streak: 0, answered: false, missed: false };
+const ear = { mode: 'chord', level: 1, cur: null, n: 0, ok: 0, streak: 0, answered: false, missed: false };
+const copy = { target: [], pos: 0, n: 0, ok: 0, missed: false, done: false };
 const earTypes = () => ear.level === 1 ? ['maj7', 'm7', '7'] : ['maj7', 'm7', '7', 'm7♭5'];
+const COPY_POOL = [60, 63, 65, 67, 70, 72]; // Cブルース系の音だけ
+function setScore() {
+  $('#earScore').textContent = ear.mode === 'chord' ? `${ear.ok} / ${ear.n}` : `${copy.ok} / ${copy.n}`;
+}
+function bumpStreak(ok) {
+  ear.streak = ok ? ear.streak + 1 : 0;
+  if (ear.streak > store.best) { store.best = ear.streak; save(); updateTop(); }
+}
+
 function newEar() {
   const types = earTypes();
   ear.cur = { root: Math.floor(Math.random() * 12), type: types[Math.floor(Math.random() * types.length)] };
@@ -415,57 +564,107 @@ function newEar() {
     b.addEventListener('click', () => answerEar(t, b));
     box.append(b);
   });
-  $('#earScore').textContent = `${ear.ok} / ${ear.n}`;
+  setScore();
 }
 const earSym = () => sym(ear.cur.root, ear.cur.type);
 function answerEar(t, b) {
   if (ear.answered) { playChordSym(sym(ear.cur.root, t)); return; } // 答えた後は聴きくらべ用
   if (t === ear.cur.type) {
     ear.answered = true;
-    if (!ear.missed) { ear.n++; ear.ok++; ear.streak++; }
-    if (ear.streak > store.best) { store.best = ear.streak; save(); updateTop(); }
+    if (!ear.missed) { ear.n++; ear.ok++; bumpStreak(true); }
     b.classList.add('right');
     const msg = ear.missed ? '' : `（${ear.streak}連続）`;
     $('#earFb').innerHTML = `<span class="ok">正解！</span> ${earSym()}${msg}<br><small>ほかのボタンを押すと聴きくらべできます</small>`;
     $('#earNext').hidden = false;
   } else {
-    if (!ear.missed) { ear.missed = true; ear.n++; } // 最初のまちがいで1問カウント
-    b.classList.add('wrong'); ear.streak = 0;
+    if (!ear.missed) { ear.missed = true; ear.n++; bumpStreak(false); }
+    b.classList.add('wrong');
     $('#earFb').innerHTML = `<span class="ng">ちがうかも。</span> もう一度聴いてみよう。`;
     playChordSym(earSym());
   }
-  $('#earScore').textContent = `${ear.ok} / ${ear.n}`;
+  setScore();
 }
+
+/* まねっこ：短いフレーズを聴いて鍵盤でまねる */
+function newCopy() {
+  const len = ear.level === 1 ? 3 : 4;
+  let idx = Math.floor(Math.random() * 4);
+  const tg = [COPY_POOL[idx]];
+  while (tg.length < len) {
+    const step = [-2, -1, 1, 2][Math.floor(Math.random() * 4)];
+    const ni = Math.min(COPY_POOL.length - 1, Math.max(0, idx + step));
+    if (ni === idx) continue;
+    idx = ni; tg.push(COPY_POOL[idx]);
+  }
+  Object.assign(copy, { target: tg, pos: 0, missed: false, done: false });
+  $('#copyNext').hidden = true;
+  $('#copyFb').innerHTML = `最初の音は<b>${NOTE_JA[tg[0] % 12]}</b>（光っている鍵盤）。`;
+  renderCopy(); setScore();
+}
+function renderCopy() {
+  const dots = $('#copyDots'); dots.innerHTML = '';
+  copy.target.forEach((m, i) => dots.append(el('span', i < copy.pos ? 'got' : '', i < copy.pos ? NOTE_JA[m % 12] : '?')));
+  document.querySelectorAll('#copyKb button').forEach(k => {
+    const m = +k.dataset.m;
+    const usable = COPY_POOL.includes(m);
+    k.classList.toggle('lit', usable);
+    k.classList.toggle('root', m === copy.target[0] && copy.pos === 0);
+    k.classList.toggle('dim', !usable);
+    k.querySelector('.lbl').textContent = usable ? NOTE_JA[m % 12] : '';
+  });
+}
+function playCopy() {
+  stopAll();
+  const t = ac().currentTime + 0.1;
+  copy.target.forEach((m, i) => tone(m, t + i * 0.45, 0.4, 0.17));
+}
+function pressCopy(m) {
+  if (copy.done || !copy.target.length) return;
+  if (m === copy.target[copy.pos]) {
+    copy.pos++;
+    if (copy.pos === copy.target.length) {
+      copy.done = true;
+      if (!copy.missed) { copy.n++; copy.ok++; bumpStreak(true); }
+      $('#copyFb').innerHTML = `<span class="ok">完璧！</span> ${copy.missed ? '' : `（${ear.streak}連続）`}`;
+      $('#copyNext').hidden = false;
+    }
+  } else {
+    if (!copy.missed) { copy.missed = true; copy.n++; bumpStreak(false); }
+    copy.pos = 0;
+    $('#copyFb').innerHTML = `<span class="ng">ちがう音。</span> もう一度お手本を聴いて、最初から。`;
+  }
+  renderCopy(); setScore();
+}
+
+function setEarMode(mode) {
+  stopAll();
+  ear.mode = mode;
+  document.querySelectorAll('#earMode button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+  $('#earChord').hidden = mode !== 'chord';
+  $('#earCopy').hidden = mode !== 'copy';
+  const [a, b] = document.querySelectorAll('#earLevel button');
+  a.textContent = mode === 'chord' ? '3種類' : '3音';
+  b.textContent = mode === 'chord' ? '4種類' : '4音';
+  if (mode === 'chord') newEar(); else newCopy();
+}
+$('#earMode').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setEarMode(b.dataset.mode); });
 $('#earPlay').addEventListener('click', () => playChordSym(earSym()));
 $('#earArp').addEventListener('click', () => playChordSym(earSym(), { arp: true }));
 $('#earNext').addEventListener('click', () => { newEar(); playChordSym(earSym()); });
+$('#copyPlay').addEventListener('click', playCopy);
+$('#copyNext').addEventListener('click', () => { newCopy(); playCopy(); });
 $('#earLevel').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   ear.level = +b.dataset.level;
   document.querySelectorAll('#earLevel button').forEach(x => x.classList.toggle('on', x === b));
-  newEar();
+  if (ear.mode === 'chord') newEar(); else newCopy();
 });
+buildKb($('#copyKb'), 60, 72, pressCopy);
 
 /* ========== 鍵盤 ========== */
 const KB_LOW = 60, KB_HIGH = 83;
 const keyState = { root: 0, type: 'maj7' };
 const KEY_TYPES = ['maj7', 'm7', '7', 'm7♭5', 'ブルース音階'];
-function buildKeyboard() {
-  const kb = $('#kb'); kb.innerHTML = '';
-  let w = 0;
-  for (let m = KB_LOW; m <= KB_HIGH; m++) {
-    const pc = m % 12, black = [1, 3, 6, 8, 10].includes(pc);
-    const k = el('button', black ? 'b' : 'w');
-    k.dataset.m = m; k.setAttribute('aria-label', NOTE[pc]);
-    k.append(el('span', 'lbl', ''));
-    if (black) k.style.left = `calc(100% / 14 * ${w} - 100% / 14 * .31)`; else w++;
-    k.addEventListener('pointerdown', e => {
-      e.preventDefault(); tone(m, ac().currentTime + 0.01, 0.9, 0.18);
-      k.classList.add('press'); setTimeout(() => k.classList.remove('press'), 150);
-    });
-    kb.append(k);
-  }
-}
 function renderKeys() {
   const { root, type } = keyState;
   const scale = type === 'ブルース音階';
@@ -494,7 +693,7 @@ function renderKeys() {
     b.addEventListener('click', () => { keyState.type = t; renderKeys(); $('#keysPlay').click(); });
     chips.append(b);
   });
-  buildKeyboard(); renderKeys();
+  buildKb($('#kb'), KB_LOW, KB_HIGH); renderKeys();
   $('#keysPlay').addEventListener('click', () => {
     const { root, type } = keyState;
     if (type === 'ブルース音階') playScale(KB_LOW + root, BLUES_SCALE);

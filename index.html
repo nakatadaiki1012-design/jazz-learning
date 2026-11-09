@@ -21,20 +21,22 @@
     <!-- 学ぶ -->
     <section class="view" id="view-learn">
       <div class="today">
-        <p class="eyebrow">今日のメニュー（10分）</p>
-        <ol class="menu">
+        <ol class="menu" aria-label="今日のメニュー（10分）">
           <li>レッスン1つ</li>
           <li>耳トレ10問</li>
-          <li>ジャズを1曲きく</li>
+          <li>1曲きく</li>
         </ol>
         <button class="btn primary" id="nextLessonBtn">続きから始める</button>
       </div>
-      <p class="eyebrow">ロードマップ</p>
       <ul class="roadmap" id="roadmap"></ul>
     </section>
 
     <!-- 耳トレ -->
     <section class="view" id="view-ear" hidden>
+      <div class="seg wide" id="earMode">
+        <button data-mode="chord" class="on">和音当て</button>
+        <button data-mode="copy">まねっこ</button>
+      </div>
       <div class="ear-head">
         <div class="seg" id="earLevel">
           <button data-level="1" class="on">3種類</button>
@@ -42,8 +44,8 @@
         </div>
         <span class="score" id="earScore">0 / 0</span>
       </div>
-      <div class="ear-stage">
-        <p class="ear-q" id="earQ">鳴った和音は、どの種類？</p>
+      <div class="ear-stage" id="earChord">
+        <p class="ear-q">鳴った和音は、どの種類？</p>
         <div class="row">
           <button class="btn play" id="earPlay">▶ 和音</button>
           <button class="btn play ghost" id="earArp">▶ 1音ずつ</button>
@@ -51,6 +53,14 @@
         <div class="choices" id="earChoices"></div>
         <p class="feedback" id="earFb" aria-live="polite"></p>
         <button class="btn primary" id="earNext" hidden>次の問題</button>
+      </div>
+      <div class="ear-stage" id="earCopy" hidden>
+        <p class="ear-q">聴いたフレーズを、鍵盤でまねしよう</p>
+        <button class="btn play" id="copyPlay">▶ お手本を聴く</button>
+        <div class="dots" id="copyDots"></div>
+        <div class="kb small" id="copyKb"></div>
+        <p class="feedback" id="copyFb" aria-live="polite"></p>
+        <button class="btn primary" id="copyNext" hidden>次のフレーズ</button>
       </div>
     </section>
 
