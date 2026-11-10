@@ -14,13 +14,14 @@
 <div class="app">
   <header class="top">
     <h1 class="logo">ジャズ・ステップ</h1>
-    <span class="streak" id="topStat"></span>
+    <button class="inst-btn" id="instBtn" aria-label="楽器をえらぶ">ピアノ</button>
   </header>
 
   <main id="main">
     <!-- 学ぶ -->
     <section class="view" id="view-learn">
       <div class="today">
+        <p class="streak" id="topStat"></p>
         <ol class="menu" aria-label="今日のメニュー（10分）">
           <li>レッスン1つ</li>
           <li>耳トレ10問</li>
@@ -55,39 +56,52 @@
         <button class="btn primary" id="earNext" hidden>次の問題</button>
       </div>
       <div class="ear-stage" id="earCopy" hidden>
-        <p class="ear-q">聴いたフレーズを、鍵盤でまねしよう</p>
+        <p class="ear-q" id="copyQ">聴いたフレーズを、鍵盤でまねしよう</p>
         <button class="btn play" id="copyPlay">▶ お手本を聴く</button>
+        <div class="seg wide small" id="copyInput">
+          <button data-in="screen" class="on">画面の鍵盤で</button>
+          <button data-in="inst">自分の楽器で</button>
+        </div>
         <div class="dots" id="copyDots"></div>
         <div class="kb small" id="copyKb"></div>
+        <div class="copy-self" id="copySelf" hidden>
+          <button class="btn" id="copyReveal">答えを見る</button>
+          <div class="row" id="copyGrade" hidden>
+            <button class="btn" id="copyYes">できた！</button>
+            <button class="btn ghost" id="copyNo">まだ</button>
+          </div>
+        </div>
         <p class="feedback" id="copyFb" aria-live="polite"></p>
         <button class="btn primary" id="copyNext" hidden>次のフレーズ</button>
       </div>
     </section>
 
-    <!-- 鍵盤 -->
+    <!-- 練習：楽器の前で、伴奏に合わせて弾く -->
     <section class="view" id="view-keys" hidden>
-      <div class="keys-controls">
-        <label class="field">キー
-          <select id="keyRoot"></select>
-        </label>
-        <div class="chips" id="keyType"></div>
+      <div class="prow">
+        <label class="field">曲 <select id="pSong"></select></label>
+        <label class="field">キー <select id="pKey"></select></label>
       </div>
-      <p class="keys-info" id="keysInfo"></p>
-      <div class="kb" id="kb"></div>
-      <div class="row three">
-        <button class="btn play" id="keysPlay">▶ 鳴らす</button>
-        <button class="btn ghost" id="keys251">ii-V-I</button>
-        <button class="btn ghost" id="keysBlues">伴奏</button>
-      </div>
-      <p class="hint">鍵盤はタップで鳴ります。光っている音だけ使えば外れません。</p>
+      <div class="chips" id="pMode"></div>
+      <div id="pPlayer"></div>
+      <p class="hint" id="pHint"></p>
     </section>
   </main>
 
   <nav class="tabs" id="tabs">
     <button data-view="learn" class="on"><span class="ti">♪</span>学ぶ</button>
     <button data-view="ear"><span class="ti">◉</span>耳トレ</button>
-    <button data-view="keys"><span class="ti">▦</span>鍵盤</button>
+    <button data-view="keys"><span class="ti">▦</span>練習</button>
   </nav>
+
+  <!-- 楽器えらび -->
+  <div class="sheet" id="instSheet" hidden>
+    <div class="sheet-body">
+      <h2>どの楽器で練習する？</h2>
+      <p class="hint">えらんだ楽器に合わせて「どこを弾くか」を表示します。あとから右上で変えられます。</p>
+      <div class="inst-list" id="instList"></div>
+    </div>
+  </div>
 
   <!-- レッスン画面（全画面） -->
   <div class="lesson" id="lesson" hidden>
