@@ -239,7 +239,7 @@ const LESSONS = [
       { h: '聴きくらべてみよう', t: '同じメロディを2通りで弾きます。',
         btns: [{ l: '▶ まっすぐ', s: 'タタ タタ', fn: () => playEighths({ swing: false }) },
                { l: '▶ スウィング', s: 'タッカ タッカ', fn: () => playEighths() }],
-        tip: 'スウィングは「長・短」のくり返し。土台は<b>3連符</b>（タ・タ・タの1つ目と3つ目）です。' },
+        tip: 'スウィングは「長・短」のくり返し。土台は<b>3連符</b>（タ・タ・タの1つ目と3つ目）です。「ジャム」タブの<b>跳ね</b>つまみを動かすと、演奏中に跳ね具合が変わります。' },
       { h: '跳ね具合はテンポで変わる', t: 'ゆっくりの曲は深く跳ね、速い曲ほど跳ねが浅く、まっすぐに近づきます。楽譜どおりに一定ではありません。',
         btns: [{ l: '▶ ゆっくり', s: '深く跳ねる', fn: () => playEighths({ bpm: 96, ratio: 0.7 }) },
                { l: '▶ 速い', s: '浅く跳ねる', fn: () => playEighths({ bpm: 220, ratio: 0.58 }) }] },
@@ -579,7 +579,8 @@ const copy = { target: [], pos: 0, n: 0, ok: 0, missed: false, done: false, inpu
 const earTypes = () => ear.level === 1 ? ['maj7', 'm7', '7'] : ['maj7', 'm7', '7', 'm7♭5'];
 const COPY_POOL = [60, 63, 65, 67, 70, 72]; // Cブルース系の音だけ
 function setScore() {
-  $('#earScore').textContent = ear.mode === 'chord' ? `${ear.ok} / ${ear.n}` : `${copy.ok} / ${copy.n}`;
+  const sc = { chord: ear, copy, rhythm: typeof rhy === 'undefined' ? { ok: 0, n: 0 } : rhy }[ear.mode];
+  $('#earScore').textContent = `${sc.ok} / ${sc.n}`;
 }
 function bumpStreak(ok) {
   ear.streak = ok ? ear.streak + 1 : 0;
@@ -702,10 +703,11 @@ function setEarMode(mode) {
   document.querySelectorAll('#earMode button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   $('#earChord').hidden = mode !== 'chord';
   $('#earCopy').hidden = mode !== 'copy';
+  $('#earRhythm').hidden = mode !== 'rhythm';
   const [a, b] = document.querySelectorAll('#earLevel button');
-  a.textContent = mode === 'chord' ? '3種類' : '3音';
-  b.textContent = mode === 'chord' ? '4種類' : '4音';
-  if (mode === 'chord') newEar(); else setCopyInput(copyDefaultInput());
+  const lab = { chord: ['3種類', '4種類'], copy: ['3音', '4音'], rhythm: ['やさしい', 'ふつう'] }[mode];
+  a.textContent = lab[0]; b.textContent = lab[1];
+  if (mode === 'chord') newEar(); else if (mode === 'copy') setCopyInput(copyDefaultInput()); else rhyNew();
 }
 $('#earMode').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setEarMode(b.dataset.mode); });
 $('#earPlay').addEventListener('click', () => playChordSym(earSym()));
@@ -717,7 +719,7 @@ $('#earLevel').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   ear.level = +b.dataset.level;
   document.querySelectorAll('#earLevel button').forEach(x => x.classList.toggle('on', x === b));
-  if (ear.mode === 'chord') newEar(); else newCopy();
+  if (ear.mode === 'chord') newEar(); else if (ear.mode === 'copy') newCopy(); else rhyNew();
 });
 buildKb($('#copyKb'), 60, 72, pressCopy);
 $('#copyInput').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setCopyInput(b.dataset.in); });
@@ -762,6 +764,7 @@ function onInstChange() {
   stopAll();
   practiceTab && practiceTab.refresh();
   if (L) renderCard();
+  jamRender(J.cur);
   if (ear.mode === 'copy') setCopyInput(copyDefaultInput());
 }
 
@@ -1001,6 +1004,218 @@ let practiceTab = null;
   const baseRefresh = practiceTab.refresh;
   practiceTab.refresh = () => { fillKeys(); baseRefresh(); apply(false); };
   apply(false);
+})();
+
+/* ========== ジャム：理屈ぬきで、伴奏にのって音を出す ========== */
+const JAM_SONGS = {
+  vamp:   { name: 'Dm7だけ（まずはここ）', key: 2, tkey: 2, prog: ['Dm7', 'Dm7', 'Dm7', 'Dm7'] },
+  blues:  { name: 'Fブルース', key: 5, tkey: 5, prog: F_BLUES },
+  '251':  { name: 'ii-V-I（C）', key: 2, tkey: 0, prog: ['Dm7', 'G7', 'Cmaj7', 'Cmaj7'] },
+  autumn: { name: '枯葉', key: 7, tkey: 10, prog: AUTUMN },
+};
+const CAT_LABEL = { gold: '安心', blue: 'おしゃれ', red: 'ブルージー' };
+const J = { song: 'vamp', mode: 'talk', swing: 0.64, bpm: 120, t: 0, beat: 0, bar: 0, mi: 2, pads: [], cur: 0 };
+
+/* 今の和音で「外れない音」を8つ。色＝気分（金：安心／青：おしゃれ／赤：ブルージー） */
+function padsFor(ch, key) {
+  const r = ch.root, iv = ch.iv;
+  let base = 48 + r; while (base < 55) base += 12;
+  const up = pc => (((pc - r) % 12) + 12) % 12;
+  const want = [[0, 'gold'], [iv[1], 'gold'], [iv[2], 'gold'], [iv[3], 'blue'], [14, 'blue'], [12, 'gold'],
+                [up(key + 3), 'red'], [up(key + 6), 'red'], [iv[1] + 12, 'gold'], [iv[2] + 12, 'gold']];
+  const seen = new Set(), out = [];
+  want.forEach(([i, cat]) => {
+    const m = base + i, pc = m % 12;
+    if (seen.has(pc) && cat !== 'gold') return;
+    if (out.some(p => p.m === m)) return;
+    seen.add(pc); out.push({ m, cat });
+  });
+  return out.slice(0, 8).sort((a, b) => a.m - b.m);
+}
+/* 和音ごとの「ドキドキ度」（0=ほっと、1=ドキドキ） */
+function tension(ch, tkey) {
+  const d = (((ch.root - tkey) % 12) + 12) % 12, ty = ch.type;
+  if (ty === 'm7♭5') return 0.75;
+  if (ty === '7') return d === 7 ? 0.95 : d === 0 ? 0.35 : d === 5 ? 0.5 : 0.78;
+  if (ty === 'maj7' || ty === '6') return d === 0 ? 0.08 : 0.3;
+  if (ty === 'm7') return d === 2 ? 0.5 : d === 0 ? 0.3 : 0.4;
+  return 0.4;
+}
+
+const jamPlaying = () => $('#jamPlay').classList.contains('on');
+const autoBar = bar => J.mode === 'watch' || (J.mode === 'talk' && bar % 4 < 2);
+
+function jamRender(barIdx) {
+  const s = JAM_SONGS[J.song], prog = s.prog, sym0 = prog[barIdx % prog.length], ch = parseChord(sym0);
+  J.pads = padsFor(ch, s.key); J.cur = barIdx;
+  $('#jamChord').innerHTML = `<b>${iSym(sym0)}</b>${isTrans() ? `<small>実音 ${sym0}</small>` : ''}`;
+  $('#jamTension span').style.width = Math.round(tension(ch, s.tkey) * 100) + '%';
+  const pads = $('#jamPads').children;
+  J.pads.forEach((p, i) => {
+    const b = pads[i]; b.className = 'pad ' + p.cat;
+    b.innerHTML = `<b>${iJa(p.m % 12)}</b><small>${CAT_LABEL[p.cat]}</small>`;
+  });
+  const turn = $('#jamTurn');
+  if (!jamPlaying()) turn.textContent = 'スタートを押して、光るパッドを好きに押そう';
+  else if (J.mode === 'talk') turn.innerHTML = autoBar(barIdx) ? '<span class="them">お手本の番</span>　よく聴いて…' : '<span class="you">あなたの番！</span>　まねしても、返事してもOK';
+  else if (J.mode === 'watch') turn.textContent = 'お手本がパッドを光らせます。どの色が多い？';
+  else turn.innerHTML = '<span class="you">自由に！</span>　くり返しと「休み」がコツ';
+}
+function flashPad(i) {
+  const b = $('#jamPads').children[i]; if (!b) return;
+  b.classList.add('hit'); setTimeout(() => b.classList.remove('hit'), 160);
+}
+function jamBeat() {
+  const s = JAM_SONGS[J.song], prog = s.prog;
+  const ch = parseChord(prog[J.bar % prog.length]), next = parseChord(prog[(J.bar + 1) % prog.length]);
+  const spb = 60 / J.bpm, t = J.t, b = J.beat, sw = J.swing;
+  if (b === 0) { const bi = J.bar; at(t, () => jamRender(bi)); }
+  const r = bassOf(ch.root);
+  bass([r, r + ch.iv[1], r + ch.iv[2], bassOf(next.root) - 1][b], t, spb * 0.95);
+  hat(t, b % 2 ? 0.1 : 0.06); if (b % 2) hat(t + sw * spb, 0.045);
+  const v = voicing(ch);
+  if (b === 0) v.forEach(n => tone(n, t, spb * 0.7, 0.06));
+  if (b === 1) v.forEach(n => tone(n, t + sw * spb, spb * 0.35, 0.05));
+  // お手本のアドリブ（2小節弾いたら、最後の拍は休む）
+  if (autoBar(J.bar) && !(J.bar % 2 === 1 && b >= 2)) {
+    const pads = padsFor(ch, s.key);
+    [[0, 0.55], [sw, 0.5]].forEach(([off, p]) => {
+      if (Math.random() > p) return;
+      J.mi = Math.max(0, Math.min(pads.length - 1, J.mi + [-2, -1, -1, 1, 1, 2][Math.floor(Math.random() * 6)]));
+      const i = J.mi, tt = t + off * spb;
+      tone(pads[i].m + 12, tt, spb * (off ? 0.4 : 0.6), off ? 0.17 : 0.13);
+      at(tt, () => flashPad(i));
+    });
+  }
+  J.beat++; if (J.beat === 4) { J.beat = 0; J.bar++; }
+  J.t += spb;
+}
+function jamStart() {
+  stopAll();
+  const c = ac();
+  Object.assign(J, { t: c.currentTime + 0.15, beat: 0, bar: 0, mi: 2 });
+  $('#jamPlay').classList.add('on'); $('#jamPlay').textContent = '■ ストップ';
+  keepAwake(true);
+  const id = setInterval(() => {
+    if (!jamPlaying()) { clearInterval(id); return; }
+    while (J.t < c.currentTime + 0.25) jamBeat();
+  }, 40);
+  loops.push(id);
+  jamRender(0);
+}
+(function initJam() {
+  const sel = $('#jamSong');
+  Object.entries(JAM_SONGS).forEach(([k, v]) => { const o = el('option', '', v.name); o.value = k; sel.append(o); });
+  sel.addEventListener('change', () => { J.song = sel.value; if (jamPlaying()) jamStart(); else jamRender(0); });
+  const pads = $('#jamPads');
+  for (let i = 0; i < 8; i++) {
+    const b = el('button', 'pad', '');
+    b.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      const p = J.pads[i]; if (!p) return;
+      tone(p.m + 12, ac().currentTime + 0.005, 0.5, 0.2);
+      flashPad(i);
+    });
+    pads.append(b);
+  }
+  $('#jamMode').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    J.mode = b.dataset.m;
+    $('#jamMode').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    jamRender(J.cur);
+  });
+  const play = $('#jamPlay'); play.dataset.toggle = '1';
+  play.addEventListener('click', () => { if (jamPlaying()) stopAll(); else jamStart(); });
+  new MutationObserver(() => { if (!jamPlaying()) { play.textContent = '▶ スタート'; jamRender(J.cur); } })
+    .observe(play, { attributes: true, attributeFilter: ['class'] });
+  const sw = $('#jamSwing'), bp = $('#jamBpm');
+  const showSw = () => { $('#jamSwingV').textContent = J.swing < 0.56 ? 'まっすぐ' : J.swing < 0.64 ? '軽く' : J.swing < 0.7 ? 'ふつう' : '深く'; };
+  sw.addEventListener('input', () => { J.swing = +sw.value / 100; showSw(); });
+  bp.addEventListener('input', () => { J.bpm = +bp.value; $('#jamBpmV').textContent = `♩=${J.bpm}`; });
+  sw.value = Math.round(J.swing * 100); bp.value = J.bpm; showSw(); $('#jamBpmV').textContent = `♩=${J.bpm}`;
+  jamRender(0);
+})();
+
+/* ========== 耳トレ：リズムまねっこ（タイミングを目で見る） ========== */
+const RHYTHMS = {
+  1: [[0, 2, 4, 6], [0, 2, 3], [0, 1, 2, 4], [0, 4, 5], [0, 2, 6, 7], [0, 1, 4]],
+  2: [[1, 3, 5], [0, 3, 6], [1, 2, 5, 6], [0, 1, 3, 6], [2, 3, 7], [0, 3, 4, 7], [1, 4, 5]],
+};
+const rhy = { pat: [], taps: [], start: 0, end: 0, spb: 0.6, phase: 'idle', n: 0, ok: 0 };
+const slotT = k => (Math.floor(k / 2) + (k % 2 ? 0.67 : 0)) * rhy.spb;
+
+function rhyNew() {
+  const list = RHYTHMS[ear.level];
+  let p; do { p = list[Math.floor(Math.random() * list.length)]; } while (list.length > 1 && p === rhy.pat);
+  Object.assign(rhy, { pat: p, taps: [], phase: 'idle' });
+  $('#rhyFb').innerHTML = '';
+  $('#rhyMsg').textContent = '「スタート」→ 1小節カウント → お手本 → あなたの番';
+  $('#rhyStart').textContent = '▶ スタート';
+  rhyDraw(false);
+  setScore();
+}
+function rhyDraw(showTarget) {
+  const tl = $('#rhyTl'); tl.innerHTML = '';
+  const W = 4 * rhy.spb;
+  for (let b = 0; b < 4; b++) tl.append(Object.assign(el('i', 'beat' + (b % 2 ? ' two' : ''), String(b + 1)), { style: `left:${b / 4 * 100}%` }));
+  if (showTarget) rhy.pat.forEach(k => { const e = el('span', 'tg'); e.style.left = (slotT(k) / W * 100) + '%'; tl.append(e); });
+  rhy.taps.forEach(tp => {
+    const e = el('span', 'tp ' + (tp.cls || '')); e.style.left = Math.max(0, Math.min(100, tp.t / W * 100)) + '%'; tl.append(e);
+  });
+}
+function rhyStart() {
+  stopAll();
+  const c = ac(), spb = rhy.spb, t0 = c.currentTime + 0.2;
+  rhy.taps = []; rhyDraw(false); $('#rhyFb').innerHTML = '';
+  for (let b = 0; b < 12; b++) { hat(t0 + b * spb, b % 2 ? 0.12 : 0.05); if (b % 2) hat(t0 + (b + 0.67) * spb, 0.04); }
+  for (let b = 0; b < 4; b++) tone(b ? 84 : 91, t0 + b * spb, 0.08, 0.12);                  // カウント
+  rhy.pat.forEach(k => tone(79, t0 + 4 * spb + slotT(k), 0.15, 0.2));                        // お手本
+  rhy.start = t0 + 8 * spb; rhy.end = rhy.start + 4 * spb;
+  rhy.phase = 'count';
+  $('#rhyMsg').textContent = 'カウント… 1・2・3・4';
+  at(t0 + 4 * spb, () => { rhy.phase = 'listen'; $('#rhyMsg').textContent = 'お手本を聴いて…'; });
+  at(rhy.start - 0.15, () => { rhy.phase = 'you'; $('#rhyMsg').innerHTML = '<span class="you">あなたの番！</span>　同じリズムでタップ'; $('#rhyPad').classList.add('go'); });
+  at(rhy.end + 0.25, rhyJudge);
+}
+function rhyTap() {
+  const c = ac();
+  tone(79, c.currentTime + 0.005, 0.12, 0.16);
+  $('#rhyPad').classList.add('hit'); setTimeout(() => $('#rhyPad').classList.remove('hit'), 120);
+  if (rhy.phase !== 'you') return;
+  const lat = c.outputLatency || c.baseLatency || 0;   // 音が耳に届くまでの遅れを差し引く
+  rhy.taps.push({ t: c.currentTime - lat - rhy.start });
+  rhyDraw(false);
+}
+function rhyJudge() {
+  rhy.phase = 'done'; $('#rhyPad').classList.remove('go');
+  const targets = rhy.pat.map(slotT), used = new Set(), offs = [];
+  let miss = 0;
+  targets.forEach(tt => {
+    let best = -1, bd = 1e9;
+    rhy.taps.forEach((tp, i) => { const d = Math.abs(tp.t - tt); if (!used.has(i) && d < bd) { bd = d; best = i; } });
+    if (best >= 0 && bd < 0.16) { used.add(best); const o = rhy.taps[best].t - tt; offs.push(o); rhy.taps[best].cls = Math.abs(o) < 0.06 ? 'good' : 'near'; }
+    else miss++;
+  });
+  const extra = rhy.taps.length - used.size;
+  rhy.taps.forEach((tp, i) => { if (!used.has(i)) tp.cls = 'extra'; });
+  rhyDraw(true);
+  const avg = offs.length ? offs.reduce((a, b) => a + b, 0) / offs.length : 0;
+  const feel = avg > 0.04 ? '少し<b>うしろ</b>（ゆったり後ノリ）' : avg < -0.04 ? '少し<b>前のめり</b>（急ぎぎみ）' : '<b>ぴったり</b>';
+  const ok = !miss && !extra;
+  rhy.n++; if (ok) rhy.ok++;
+  bumpStreak(ok);
+  $('#rhyFb').innerHTML = ok
+    ? `<span class="ok">いいノリ！</span> タイミングは${feel}。`
+    : `<span class="ng">${miss ? `${miss}回たりない` : ''}${miss && extra ? '・' : ''}${extra ? `${extra}回多い` : ''}</span>　点線がお手本の位置です。`;
+  $('#rhyMsg').textContent = '点線＝お手本　●＝あなた（緑：ぴったり／黄：おしい／赤：よけい）';
+  $('#rhyStart').textContent = '↻ もう一度';
+  $('#rhyNext').hidden = false;
+  setScore();
+}
+(function initRhythm() {
+  $('#rhyStart').addEventListener('click', rhyStart);
+  $('#rhyNext').addEventListener('click', () => { $('#rhyNext').hidden = true; rhyNew(); rhyStart(); });
+  $('#rhyPad').addEventListener('pointerdown', e => { e.preventDefault(); rhyTap(); });
 })();
 
 if (store.inst) onInstChange(); else { onInstChange(); openInstSheet(); }

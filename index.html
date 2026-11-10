@@ -23,9 +23,9 @@
       <div class="today">
         <p class="streak" id="topStat"></p>
         <ol class="menu" aria-label="今日のメニュー（10分）">
+          <li>ジャム5分</li>
           <li>レッスン1つ</li>
-          <li>耳トレ10問</li>
-          <li>1曲きく</li>
+          <li>耳トレ</li>
         </ol>
         <button class="btn primary" id="nextLessonBtn">続きから始める</button>
       </div>
@@ -37,6 +37,7 @@
       <div class="seg wide" id="earMode">
         <button data-mode="chord" class="on">和音当て</button>
         <button data-mode="copy">まねっこ</button>
+        <button data-mode="rhythm">リズム</button>
       </div>
       <div class="ear-head">
         <div class="seg" id="earLevel">
@@ -74,6 +75,45 @@
         <p class="feedback" id="copyFb" aria-live="polite"></p>
         <button class="btn primary" id="copyNext" hidden>次のフレーズ</button>
       </div>
+      <div class="ear-stage" id="earRhythm" hidden>
+        <p class="ear-q">お手本のリズムを、タップでまねしよう</p>
+        <p class="rhy-msg" id="rhyMsg"></p>
+        <div class="rhy-tl" id="rhyTl"></div>
+        <button class="rhy-pad" id="rhyPad">タップ</button>
+        <p class="feedback" id="rhyFb" aria-live="polite"></p>
+        <div class="row">
+          <button class="btn play" id="rhyStart">▶ スタート</button>
+          <button class="btn primary" id="rhyNext" hidden>次のリズム</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ジャム：感覚で遊ぶ -->
+    <section class="view" id="view-jam" hidden>
+      <div class="prow">
+        <label class="field">曲 <select id="jamSong"></select></label>
+      </div>
+      <div class="seg wide three" id="jamMode">
+        <button data-m="watch">お手本を見る</button>
+        <button data-m="talk" class="on">会話する</button>
+        <button data-m="free">自由に</button>
+      </div>
+      <div class="jam-now">
+        <span class="jam-chord" id="jamChord"></span>
+        <div class="tension" aria-label="ドキドキ度">
+          <div class="tbar" id="jamTension"><span></span></div>
+          <div class="tlab"><span>ほっと</span><span>ドキドキ</span></div>
+        </div>
+      </div>
+      <p class="jam-turn" id="jamTurn"></p>
+      <div class="pads" id="jamPads"></div>
+      <div class="jam-ctl">
+        <button class="btn play" id="jamPlay">▶ スタート</button>
+        <div class="knobs">
+          <label class="knob">跳ね <input type="range" id="jamSwing" min="50" max="75" step="1"><span id="jamSwingV"></span></label>
+          <label class="knob">速さ <input type="range" id="jamBpm" min="70" max="220" step="5"><span id="jamBpmV"></span></label>
+        </div>
+      </div>
     </section>
 
     <!-- 練習：楽器の前で、伴奏に合わせて弾く -->
@@ -90,6 +130,7 @@
 
   <nav class="tabs" id="tabs">
     <button data-view="learn" class="on"><span class="ti">♪</span>学ぶ</button>
+    <button data-view="jam"><span class="ti">◆</span>ジャム</button>
     <button data-view="ear"><span class="ti">◉</span>耳トレ</button>
     <button data-view="keys"><span class="ti">▦</span>練習</button>
   </nav>
